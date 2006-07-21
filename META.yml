@@ -1,6 +1,6 @@
 ---
 name: Catalyst-Plugin-XSendFile
-version: 0.01
+version: 0.02
 author:
   - 'Daisuke Murase <typester@cpan.org>'
 abstract: Catalyst plugin for lighttpd's X-Sendfile.
@@ -16,9 +16,7 @@ requires:
 provides:
   Catalyst::Plugin::XSendFile:
     file: lib/Catalyst/Plugin/XSendFile.pm
-    version: 0.01
-  Catalyst::Response:
-    file: lib/Catalyst/Plugin/XSendFile.pm
+    version: 0.02
 generated_by: Module::Build version 0.2801
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

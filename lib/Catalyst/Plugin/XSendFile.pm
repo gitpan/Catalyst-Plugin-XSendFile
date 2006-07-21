@@ -7,7 +7,7 @@ use NEXT;
 use MIME::Types;
 use Path::Class qw/file/;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 =head1 NAME
 
