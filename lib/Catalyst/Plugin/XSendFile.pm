@@ -3,11 +3,15 @@ use strict;
 use warnings;
 use base qw/Class::Data::Inheritable/;
 
+use Catalyst::Utils;
+use File::Temp qw/tempdir tempfile/;
+use File::stat;
 use NEXT;
-use MIME::Types;
 use Path::Class qw/file/;
+use Scalar::Util qw/blessed/;
+use bytes;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03_001';
 
 =head1 NAME
 
@@ -17,6 +21,7 @@ Catalyst::Plugin::XSendFile - Catalyst plugin for lighttpd's X-Sendfile.
 
     use Catalyst qw/XSendFile/;
     
+    # manual send file
     sub show : Path('/files') {
         my ( $self, $c, $filename ) = @_;
     
@@ -29,6 +34,14 @@ Catalyst::Plugin::XSendFile - Catalyst plugin for lighttpd's X-Sendfile.
             $c->res->sendfile( "/path/to/$filename" );
         }
     }
+    
+    
+    # auto using x-send-tempfile on large content serving
+    MyApp->config->{sendfile}{tempdir} = '/dev/shm';
+
+=head1 NOTICE
+
+B<This developer version of module requires lighttpd 1.5.0 (r1477) or above.>
 
 =head1 DESCRIPTION
 
@@ -49,10 +62,23 @@ instead of above.
 But off-course you know, this feature doesn't work on Catalyst Test Server (myapp_server.pl).
 So this module also provide its emulation when your app on test server.
 
+=head1 SERVE LARGE CONTENT BY X-LIGHTTPD-send-tempfile
+
+Latest version of lighttpd (1.5.0) also support X-LIGHTTPD-send-tempfile, that is almost same to X-LIGHTTPD-send-file except deleting sending file when server sent file.
+
+This module automatically use this feature when content length is above 16kbytes.
+
+And for more performance, you need to set tempdir ($c->config->{sendfile}{tempdir}) on tmpfs (/dev/shm).
+
+See below urls for detail.
+
 =head1 SEE ALSO
 
 lighty's life - X-Sendfile
 http://blog.lighttpd.net/articles/2006/07/02/x-sendfile
+
+Faster - FastCGI
+http://blog.lighttpd.net/articles/2006/11/29/faster-fastcgi
 
 =head1 NOTICE
 
@@ -60,11 +86,15 @@ To use it you have to set "allow-x-sendfile" option enabled in your fastcgi conf
 
     "allow-x-send-file" => "enable",
 
+or on 1.5.0:
+
+    proxy-core.allow-x-sendfile = "enable"
+
 =head1 EXTENDED_METHODS
 
 =head2 setup
 
-Setup MIME::Types object unless Static::Simple loaded.
+Setup tempdir for x-send-tempfile
 
 =cut
 
@@ -72,36 +102,58 @@ sub setup {
     my $c = shift;
     $c->NEXT::setup(@_);
 
-    unless ( $c->registered_plugins('Static::Simple') ) {
-        __PACKAGE__->mk_classdata(
-            _static_mime_types => MIME::Types->new( only_complete => 1 ) );
-        __PACKAGE__->_static_mime_types->create_type_index;
-    }
+    my $tempdir = $c->config->{sendfile}{tempdir}
+      || Catalyst::Utils::class2tempdir($c, 1);
+
+    __PACKAGE__->mk_classdata(
+        _sendfile_tempdir => tempdir( DIR => $tempdir, CLEANUP => 1 ) );
 
     $c;
 }
 
 =head2 finalize_headers
 
-Added X-Sendfile emulation feature for test server.
+Serving large (16kbytes) content via X-LIGHTTPD-send-tempfile.
 
 =cut
 
 sub finalize_headers {
     my $c = shift;
 
+    my $engine = $ENV{CATALYST_ENGINE} || '';
+
     # X-Sendfile emulation for test server.
-    if ( ($ENV{CATALYST_ENGINE} || '') =~ /^HTTP/ ) {
+    if ( $engine =~ /^HTTP/ ) {
         if ( my $sendfile = file( $c->res->header('X-LIGHTTPD-send-file') ) ) {
             $c->res->headers->remove_header('X-LIGHTTPD-send-file');
             if ( $sendfile->stat && -f _ && -r _ ) {
-                my ($ext) = $sendfile =~ /\.(.+?)$/;
-                my $user_types = $c->config->{static}->{mime_types};
-                my $mime_type  = $user_types->{$ext}
-                  || $c->_static_mime_types->mimeTypeOf($ext);
-                $c->res->status(200);
-                $c->res->content_type($mime_type);
                 $c->res->body( $sendfile->openr );
+            }
+        }
+    }
+    elsif ( $engine eq 'FastCGI' ) {
+
+        if ( my $body = $c->res->body ) {
+            my ( $fh, $tempfile ) = tempfile( DIR => $c->_sendfile_tempdir );
+
+            if ( blessed($body) && $body->can('read') or ref($body) eq 'GLOB' ) {
+                my $stat = stat $body;
+                if ( $stat and $stat->size >= 16*1024 ) {
+                    while ( !eof $body ) {
+                        read $body, my ($buffer), 4096;
+                        last unless $fh->write($buffer);
+                    }
+                    close $body;
+                    close $fh;
+
+                    $c->res->send_tempfile($tempfile);
+                }
+            }
+            elsif ( bytes::length($body) >= 16*1024 ) {
+                $fh->write($body);
+                $fh->close;
+
+                $c->res->send_tempfile($tempfile);
             }
         }
     }
@@ -118,11 +170,19 @@ Set X-LIGHTTPD-send-file header easily.
 =cut
 
 {
-    package Catalyst::Response;
+    package # avoid PAUSE Indexer
+        Catalyst::Response;
 
     sub sendfile {
         my ($self, $file) = @_;
+        $self->{body} = '';
         $self->header( 'X-LIGHTTPD-send-file' => $file );
+    }
+
+    sub send_tempfile {
+        my ($self, $file) = @_;
+        $self->{body} = '';
+        $self->header( 'X-LIGHTTPD-send-tempfile' => $file );
     }
 }
 

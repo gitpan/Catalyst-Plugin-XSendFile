@@ -4,7 +4,8 @@ NAME
 SYNOPSIS
         use Catalyst qw/XSendFile/;
         
-    sub show : Path('/files') {
+    # manual send file
+        sub show : Path('/files') {
             my ( $self, $c, $filename ) = @_;
         
         # unless login, it shows 403 forbidden screen
@@ -16,6 +17,14 @@ SYNOPSIS
                 $c->res->sendfile( "/path/to/$filename" );
             }
         }
+        
+    
+    # auto using x-send-tempfile on large content serving
+        MyApp->config->{sendfile}{tempdir} = '/dev/shm';
+
+NOTICE
+    This developer version of module requires lighttpd 1.5.0 (r1477) or
+    above.
 
 DESCRIPTION
     lighty's X-Sendfile feature is great.
@@ -38,9 +47,25 @@ DESCRIPTION
     Server (myapp_server.pl). So this module also provide its emulation when
     your app on test server.
 
+SERVE LARGE CONTENT BY X-LIGHTTPD-send-tempfile
+    Latest version of lighttpd (1.5.0) also support
+    X-LIGHTTPD-send-tempfile, that is almost same to X-LIGHTTPD-send-file
+    except deleting sending file when server sent file.
+
+    This module automatically use this feature when content length is above
+    16kbytes.
+
+    And for more performance, you need to set tempdir
+    ($c->config->{sendfile}{tempdir}) on tmpfs (/dev/shm).
+
+    See below urls for detail.
+
 SEE ALSO
     lighty's life - X-Sendfile
     http://blog.lighttpd.net/articles/2006/07/02/x-sendfile
+
+    Faster - FastCGI
+    http://blog.lighttpd.net/articles/2006/11/29/faster-fastcgi
 
 NOTICE
     To use it you have to set "allow-x-sendfile" option enabled in your
@@ -48,12 +73,16 @@ NOTICE
 
         "allow-x-send-file" => "enable",
 
+    or on 1.5.0:
+
+        proxy-core.allow-x-sendfile = "enable"
+
 EXTENDED_METHODS
   setup
-    Setup MIME::Types object unless Static::Simple loaded.
+    Setup tempdir for x-send-tempfile
 
   finalize_headers
-    Added X-Sendfile emulation feature for test server.
+    Serving large (16kbytes) content via X-LIGHTTPD-send-tempfile.
 
 EXTENDED_RESPONSE_METHODS
   sendfile
